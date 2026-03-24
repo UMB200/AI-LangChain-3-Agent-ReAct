@@ -1,0 +1,12 @@
+[project]
+name = "ai-langchain-3-agent"
+version = "0.1.0"
+description = "LangChain Agent redo part 4: ReAct Under the Hood"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=1.2.13",
+    "langchain-ollama>=1.0.1",
+    "langchain-openai>=1.1.12",
+    "python-dotenv>=1.2.2",
+]
