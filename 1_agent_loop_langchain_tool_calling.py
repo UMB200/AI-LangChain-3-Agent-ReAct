@@ -1,3 +1,4 @@
+from math import prod
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -5,32 +6,43 @@ from langchain_ollama import ChatOllama
 from langchain.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langsmith import traceable
+from typing import Union
 
 MAX_ITERATIONS = 10
 MODEL = "qwen3:1.7b"
 
 @tool
-def get_prod_price(product: str) -> float:
-     """Look up the price of a product in the catalog."""
-     print(f" >> Executing get_product_price(product='{product}')")
-     prices = {
+def get_prod_price(product: str) -> Union[float, str]:
+    """Look up the price of a product in the catalog."""
+    print(f" >> Executing get_product_price(product='{product}')")
+    prices = {
         "laptop": 1299.99, 
         "headphones": 149.95, 
         "keyboard": 89.50}
-     return prices.get(product, 0)
+    price = prices.get(product.lower())
+    print(f"f >> [Tool] get_prod_price: {product}= {price}")
+    return price if price is not None else f"Error: '{product}' is not in the catalog."
 
 @tool
-def apply_discount(price: float, discount_tier: str) -> float:
+def apply_discount(price: float, discount_tier: str) -> Union[float, str]:
     """Apply a discount tier to a price and return the final price.
     Available tiers: bronze, silver, gold."""
     print(f"  >> Executing apply_discount(price={price}, discount_tier='{discount_tier}')")
-    discount_percent = {
+    discount_map = {
         "bronze": 5,
         "silver": 15,
         "gold": 25
     }
-    discount = discount_percent.get(discount_tier, 0)
-    return round(price * (1-discount/100), 2)
+    rate = discount_map.get(discount_tier, 0)
+    if rate is None:
+        return f"Error: invalid tier '{discount_tier}' Use bronze, silver or gold."
+    try:
+        final_price = round(price * (1- rate/100), 2)
+        print(f" >> [Tool] apply_discount: {price} at {discount_tier} = {final_price}") 
+        return final_price
+    except ValueError:
+        return "Error: 'price' must be a valid number."
+
 
 # --- Agent Loop ----
 
@@ -41,10 +53,9 @@ def run_agent(question: str):
 
     llm = ChatOllama(model = MODEL, temperature=0)
     llm_with_tools = llm.bind_tools(tools)
-    
     print(f"Question: {question}")
     print("=" * 60)
-
+    
     messages = [
         SystemMessage(
             content=(
@@ -69,39 +80,36 @@ def run_agent(question: str):
     for iteration in range(1, MAX_ITERATIONS +1):
         print(f"\n******* Iteration {iteration} ********")
 
-        ai_message = llm_with_tools.invoke(messages)
-
-        tool_calls = ai_message.tool_calls
+        ai_msg = llm_with_tools.invoke(messages)
+        messages.append(ai_msg)
 
         # If there is no tool calls, then it is the final answer
-        if not tool_calls:
-            print(f"\nFinal answer: {ai_message.content}")
-            return ai_message.content
+        if not ai_msg.tool_calls:
+            print(f"\nFinal answer: {ai_msg.content}")
+            return ai_msg.content
 
         # Process only the 1st tool call - force one tool per iteration
-        tool_call = tool_calls[0]
-        tool_name = tool_call.get("name")
-        tool_args = tool_call.get("args", {})
-        tool_call_id = tool_call.get("id")
-
-        print(f" [Tool Selected] {tool_name} with args: {tool_args}")
-
-        tool_to_use = tools_dict.get(tool_name)
-        if tool_to_use is None:
-            raise ValueError(f"Tool '{tool_name}' not found")
+        for tool_call in ai_msg.tool_calls:
+            tool_name = tool_call["name"].lower()
+            tool_args = tool_call.get("args", {})
+            tool_to_use = tools_dict.get(tool_name)
         
-        tool_observation = tool_to_use.invoke(tool_args)
-        print(f" [Tool Result] {tool_observation}")
-
-        messages.append(ai_message)
-        messages.append(
-            ToolMessage(content=str(tool_observation), tool_call_id=tool_call_id))
+            if tool_to_use:
+                try:
+                    tool_observation = tool_to_use.invoke(tool_args)
+                except Exception as e:
+                    tool_observation = f"Executuon Error: {str(e)}. Check your arguments."
+            else:
+                tool_observation = f"Error: Tool '{tool_name}' doesn't exist"
+            messages.append(ToolMessage(
+                content=str(tool_observation),
+                tool_call_id=tool_call["id"]))            
         
-    print("Error: Max iterations reached without a final answer")
+    print("Error: Agent timed out -> Max iterations reached without a final answer")
     return None
 
 if __name__ == "__main__":
     print("LangChain Agent started (.bind_tools)")
     print("\n")
     qstn = "What is the price of a laptop after applying a gold discount?"
-    result = run_agent(qstn)
+    run_agent(qstn)
